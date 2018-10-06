@@ -34,11 +34,13 @@ import (
 	"syscall"
 )
 
-// Error records the name of a binary that failed to be executed
-// and the reason it failed.
+// Error is returned by LookPath when it fails to classify a file as an
+// executable.
 type Error struct {
+	// Name is the file name for which the error occurred.
 	Name string
-	Err  error
+	// Err is the underlying error.
+	Err error
 }
 
 func (e *Error) Error() string {
@@ -77,9 +79,12 @@ type Cmd struct {
 	Dir string
 
 	// Stdin specifies the process's standard input.
+	//
 	// If Stdin is nil, the process reads from the null device (os.DevNull).
+	//
 	// If Stdin is an *os.File, the process's standard input is connected
 	// directly to that file.
+	//
 	// Otherwise, during the execution of the command a separate
 	// goroutine reads from Stdin and delivers that data to the command
 	// over a pipe. In this case, Wait does not complete until the goroutine
@@ -92,14 +97,24 @@ type Cmd struct {
 	// If either is nil, Run connects the corresponding file descriptor
 	// to the null device (os.DevNull).
 	//
-	// If Stdout and Stderr are the same writer, and have a type that can be compared with ==,
-	// at most one goroutine at a time will call Write.
+	// If either is an *os.File, the corresponding output from the process
+	// is connected directly to that file.
+	//
+	// Otherwise, during the execution of the command a separate goroutine
+	// reads from the process over a pipe and delivers that data to the
+	// corresponding Writer. In this case, Wait does not complete until the
+	// goroutine reaches EOF or encounters an error.
+	//
+	// If Stdout and Stderr are the same writer, and have a type that can
+	// be compared with ==, at most one goroutine at a time will call Write.
 	Stdout io.Writer
 	Stderr io.Writer
 
 	// ExtraFiles specifies additional open files to be inherited by the
 	// new process. It does not include standard input, standard output, or
 	// standard error. If non-nil, entry i becomes file descriptor 3+i.
+	//
+	// ExtraFiles is not supported on Windows.
 	ExtraFiles []*os.File
 
 	// SysProcAttr holds optional, operating system-specific attributes.
@@ -137,6 +152,15 @@ type Cmd struct {
 // followed by the elements of arg, so arg should not include the
 // command name itself. For example, Command("echo", "hello").
 // Args[0] is always name, not the possibly resolved Path.
+//
+// On Windows, processes receive the whole command line as a single string
+// and do their own parsing. Command combines and quotes Args into a command
+// line string with an algorithm compatible with applications using
+// CommandLineToArgvW (which is the most common way). Notable exceptions are
+// msiexec.exe and cmd.exe (and thus, all batch files), which have a different
+// unquoting algorithm. In these or other similar cases, you can do the
+// quoting yourself and provide the full command line in SysProcAttr.CmdLine,
+// leaving Args empty.
 func Command(name string, arg ...string) *Cmd {
 	cmd := &Cmd{
 		Path: name,
@@ -190,7 +214,7 @@ func (c *Cmd) argv() []string {
 }
 
 // skipStdinCopyError optionally specifies a function which reports
-// whether the provided the stdin copy error should be ignored.
+// whether the provided stdin copy error should be ignored.
 // It is non-nil everywhere but Plan 9, which lacks EPIPE. See exec_posix.go.
 var skipStdinCopyError func(error) bool
 
@@ -282,6 +306,11 @@ func (c *Cmd) closeDescriptors(closers []io.Closer) {
 //
 // If the command starts but does not complete successfully, the error is of
 // type *ExitError. Other error types may be returned for other situations.
+//
+// If the calling goroutine has locked the operating system thread
+// with runtime.LockOSThread and modified any inheritable OS-level
+// thread state (for example, Linux or Plan 9 name spaces), the new
+// process will inherit the caller's thread state.
 func (c *Cmd) Run() error {
 	if err := c.Start(); err != nil {
 		return err
@@ -429,9 +458,8 @@ func (e *ExitError) Error() string {
 // error is of type *ExitError. Other error types may be
 // returned for I/O problems.
 //
-// If c.Stdin is not an *os.File, Wait also waits for the I/O loop
-// copying from c.Stdin into the process's standard input
-// to complete.
+// If any of c.Stdin, c.Stdout or c.Stderr are not an *os.File, Wait also waits
+// for the respective I/O loop copying to or from the process to complete.
 //
 // Wait releases any resources associated with the Cmd.
 func (c *Cmd) Wait() error {

@@ -11,6 +11,9 @@
 // The default Source is safe for concurrent use by multiple goroutines, but
 // Sources created by NewSource are not.
 //
+// Mathematical interval notation such as [0, n) is used throughout the
+// documentation for this package.
+//
 // For random numbers suitable for security-sensitive work, see the crypto/rand
 // package.
 package rand
@@ -393,7 +396,7 @@ func (r *lockedSource) Seed(seed int64) {
 	r.lk.Unlock()
 }
 
-// seedPos implements Seed for a lockedSource without a race condiiton.
+// seedPos implements Seed for a lockedSource without a race condition.
 func (r *lockedSource) seedPos(seed int64, readPos *int8) {
 	r.lk.Lock()
 	r.src.Seed(seed)

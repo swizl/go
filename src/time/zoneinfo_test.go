@@ -5,8 +5,10 @@
 package time_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -31,7 +33,17 @@ func TestEnvVarUsage(t *testing.T) {
 	defer time.ResetZoneinfoForTesting()
 
 	if zoneinfo := time.ZoneinfoForTesting(); testZoneinfo != *zoneinfo {
-		t.Errorf("zoneinfo does not match env variable: got %q want %q", zoneinfo, testZoneinfo)
+		t.Errorf("zoneinfo does not match env variable: got %q want %q", *zoneinfo, testZoneinfo)
+	}
+}
+
+func TestBadLocationErrMsg(t *testing.T) {
+	time.ResetZoneinfoForTesting()
+	loc := "Asia/SomethingNotExist"
+	want := errors.New("unknown time zone " + loc)
+	_, err := time.LoadLocation(loc)
+	if err.Error() != want.Error() {
+		t.Errorf("LoadLocation(%q) error = %v; want %v", loc, err, want)
 	}
 }
 
@@ -114,5 +126,29 @@ func TestLocationNames(t *testing.T) {
 	}
 	if time.UTC.String() != "UTC" {
 		t.Errorf(`invalid UTC location name: got %q want "UTC"`, time.UTC)
+	}
+}
+
+func TestLoadLocationFromTZData(t *testing.T) {
+	time.ForceZipFileForTesting(true)
+	defer time.ForceZipFileForTesting(false)
+
+	const locationName = "Asia/Jerusalem"
+	reference, err := time.LoadLocation(locationName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tzinfo, err := time.LoadTzinfo(locationName, time.OrigZoneSources[len(time.OrigZoneSources)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample, err := time.LoadLocationFromTZData(locationName, tzinfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(reference, sample) {
+		t.Errorf("return values of LoadLocationFromTZData and LoadLocation don't match")
 	}
 }

@@ -405,13 +405,10 @@ func (a *elfAttributeList) done() bool {
 // find the one we are looking for. This format is slightly documented in "ELF
 // for the ARM Architecture" but mostly this is derived from reading the source
 // to gold and readelf.
-func parseArmAttributes(e binary.ByteOrder, initEhdrFlags uint32, data []byte) (ehdrFlags uint32, err error) {
-	// We assume the soft-float ABI unless we see a tag indicating otherwise.
-	if initEhdrFlags == 0x5000002 {
-		ehdrFlags = 0x5000202
-	}
+func parseArmAttributes(e binary.ByteOrder, data []byte) (found bool, ehdrFlags uint32, err error) {
+	found = false
 	if data[0] != 'A' {
-		return 0, fmt.Errorf(".ARM.attributes has unexpected format %c\n", data[0])
+		return false, 0, fmt.Errorf(".ARM.attributes has unexpected format %c\n", data[0])
 	}
 	data = data[1:]
 	for len(data) != 0 {
@@ -421,7 +418,7 @@ func parseArmAttributes(e binary.ByteOrder, initEhdrFlags uint32, data []byte) (
 
 		nulIndex := bytes.IndexByte(sectiondata, 0)
 		if nulIndex < 0 {
-			return 0, fmt.Errorf("corrupt .ARM.attributes (section name not NUL-terminated)\n")
+			return false, 0, fmt.Errorf("corrupt .ARM.attributes (section name not NUL-terminated)\n")
 		}
 		name := string(sectiondata[:nulIndex])
 		sectiondata = sectiondata[nulIndex+1:]
@@ -442,15 +439,16 @@ func parseArmAttributes(e binary.ByteOrder, initEhdrFlags uint32, data []byte) (
 			for !attrList.done() {
 				attr := attrList.armAttr()
 				if attr.tag == TagABIVFPArgs && attr.ival == 1 {
+					found = true
 					ehdrFlags = 0x5000402 // has entry point, Version5 EABI, hard-float ABI
 				}
 			}
 			if attrList.err != nil {
-				return 0, fmt.Errorf("could not parse .ARM.attributes\n")
+				return false, 0, fmt.Errorf("could not parse .ARM.attributes\n")
 			}
 		}
 	}
-	return ehdrFlags, nil
+	return found, ehdrFlags, nil
 }
 
 // Load loads the ELF file pn from f.
@@ -459,7 +457,7 @@ func parseArmAttributes(e binary.ByteOrder, initEhdrFlags uint32, data []byte) (
 // On ARM systems, Load will attempt to determine what ELF header flags to
 // emit by scanning the attributes in the ELF file being loaded. The
 // parameter initEhdrFlags contains the current header flags for the output
-// object, and the returnd ehdrFlags contains what this Load function computes.
+// object, and the returned ehdrFlags contains what this Load function computes.
 // TODO: find a better place for this logic.
 func Load(arch *sys.Arch, syms *sym.Symbols, f *bio.Reader, pkg string, length int64, pn string, initEhdrFlags uint32) (textp []*sym.Symbol, ehdrFlags uint32, err error) {
 	errorf := func(str string, args ...interface{}) ([]*sym.Symbol, uint32, error) {
@@ -686,10 +684,19 @@ func Load(arch *sys.Arch, syms *sym.Symbols, f *bio.Reader, pkg string, length i
 			if err := elfmap(elfobj, sect); err != nil {
 				return errorf("%s: malformed elf file: %v", pn, err)
 			}
-			ehdrFlags, err = parseArmAttributes(e, initEhdrFlags, sect.base[:sect.size])
+			// We assume the soft-float ABI unless we see a tag indicating otherwise.
+			if initEhdrFlags == 0x5000002 {
+				ehdrFlags = 0x5000202
+			} else {
+				ehdrFlags = initEhdrFlags
+			}
+			found, newEhdrFlags, err := parseArmAttributes(e, sect.base[:sect.size])
 			if err != nil {
 				// TODO(dfc) should this return an error?
 				log.Printf("%s: %v", pn, err)
+			}
+			if found {
+				ehdrFlags = newEhdrFlags
 			}
 		}
 		if (sect.type_ != ElfSectProgbits && sect.type_ != ElfSectNobits) || sect.flags&ElfSectFlagAlloc == 0 {
@@ -798,7 +805,7 @@ func Load(arch *sys.Arch, syms *sym.Symbols, f *bio.Reader, pkg string, length i
 		s.Type = sect.sym.Type
 		s.Attr |= sym.AttrSubSymbol
 		if !s.Attr.CgoExportDynamic() {
-			s.Dynimplib = "" // satisfy dynimport
+			s.SetDynimplib("") // satisfy dynimport
 		}
 		s.Value = int64(elfsym.value)
 		s.Size = int64(elfsym.size)
@@ -813,7 +820,7 @@ func Load(arch *sys.Arch, syms *sym.Symbols, f *bio.Reader, pkg string, length i
 		if elfobj.machine == ElfMachPower64 {
 			flag := int(elfsym.other) >> 5
 			if 2 <= flag && flag <= 6 {
-				s.Localentry = 1 << uint(flag-2)
+				s.SetLocalentry(1 << uint(flag-2))
 			} else if flag == 7 {
 				return errorf("%v: invalid sym.other 0x%x", s, elfsym.other)
 			}
@@ -1041,7 +1048,7 @@ func readelfsym(arch *sys.Arch, syms *sym.Symbols, elfobj *ElfObj, i int, elfsym
 				// __i686.get_pc_thunk.bx is allowed to be duplicated, to
 				// workaround that we set dupok.
 				// TODO(minux): correctly handle __i686.get_pc_thunk.bx without
-				// set dupok generally. See http://codereview.appspot.com/5823055/
+				// set dupok generally. See https://golang.org/cl/5823055
 				// comment #5 for details.
 				if s != nil && elfsym.other == 2 {
 					s.Attr |= sym.AttrDuplicateOK | sym.AttrVisibilityHidden

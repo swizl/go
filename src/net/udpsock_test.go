@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build !js
+
 package net
 
 import (
@@ -355,13 +357,15 @@ func TestUDPZeroBytePayload(t *testing.T) {
 		var b [1]byte
 		if genericRead {
 			_, err = c.(Conn).Read(b[:])
+			// Read may timeout, it depends on the platform.
+			if err != nil {
+				if nerr, ok := err.(Error); !ok || !nerr.Timeout() {
+					t.Fatal(err)
+				}
+			}
 		} else {
 			_, _, err = c.ReadFrom(b[:])
-		}
-		switch err {
-		case nil: // ReadFrom succeeds
-		default: // Read may timeout, it depends on the platform
-			if nerr, ok := err.(Error); !ok || !nerr.Timeout() {
+			if err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -398,9 +402,56 @@ func TestUDPZeroByteBuffer(t *testing.T) {
 		switch err {
 		case nil: // ReadFrom succeeds
 		default: // Read may timeout, it depends on the platform
-			if nerr, ok := err.(Error); (!ok || !nerr.Timeout()) && runtime.GOOS != "windows" { // Windows returns WSAEMSGSIZ
+			if nerr, ok := err.(Error); (!ok || !nerr.Timeout()) && runtime.GOOS != "windows" { // Windows returns WSAEMSGSIZE
 				t.Fatal(err)
 			}
+		}
+	}
+}
+
+func TestUDPReadSizeError(t *testing.T) {
+	switch runtime.GOOS {
+	case "nacl", "plan9":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	c1, err := newLocalPacketListener("udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c1.Close()
+
+	c2, err := Dial("udp", c1.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	b1 := []byte("READ SIZE ERROR TEST")
+	for _, genericRead := range []bool{false, true} {
+		n, err := c2.Write(b1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != len(b1) {
+			t.Errorf("got %d; want %d", n, len(b1))
+		}
+		c1.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		b2 := make([]byte, len(b1)-1)
+		if genericRead {
+			n, err = c1.(Conn).Read(b2)
+		} else {
+			n, _, err = c1.ReadFrom(b2)
+		}
+		switch err {
+		case nil: // ReadFrom succeeds
+		default: // Read may timeout, it depends on the platform
+			if nerr, ok := err.(Error); (!ok || !nerr.Timeout()) && runtime.GOOS != "windows" { // Windows returns WSAEMSGSIZE
+				t.Fatal(err)
+			}
+		}
+		if n != len(b1)-1 {
+			t.Fatalf("got %d; want %d", n, len(b1)-1)
 		}
 	}
 }

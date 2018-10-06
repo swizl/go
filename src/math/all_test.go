@@ -25,7 +25,7 @@ var vf = []float64{
 }
 
 // The expected results below were computed by the high precision calculators
-// at http://keisan.casio.com/.  More exact input values (array vf[], above)
+// at https://keisan.casio.com/.  More exact input values (array vf[], above)
 // were obtained by printing them with "%.26f".  The answers were calculated
 // to 26 digits (by using the "Digit number" drop-down control of each
 // calculator).
@@ -128,7 +128,7 @@ var cbrt = []float64{
 var ceil = []float64{
 	5.0000000000000000e+00,
 	8.0000000000000000e+00,
-	0.0000000000000000e+00,
+	Copysign(0, -1),
 	-5.0000000000000000e+00,
 	1.0000000000000000e+01,
 	3.0000000000000000e+00,
@@ -644,7 +644,7 @@ var tanh = []float64{
 var trunc = []float64{
 	4.0000000000000000e+00,
 	7.0000000000000000e+00,
-	-0.0000000000000000e+00,
+	Copysign(0, -1),
 	-5.0000000000000000e+00,
 	9.0000000000000000e+00,
 	2.0000000000000000e+00,
@@ -946,6 +946,8 @@ var vferfSC = []float64{
 	0,
 	Inf(1),
 	NaN(),
+	-1000,
+	1000,
 }
 var erfSC = []float64{
 	-1,
@@ -953,17 +955,23 @@ var erfSC = []float64{
 	0,
 	1,
 	NaN(),
+	-1,
+	1,
 }
 
 var vferfcSC = []float64{
 	Inf(-1),
 	Inf(1),
 	NaN(),
+	-1000,
+	1000,
 }
 var erfcSC = []float64{
 	2,
 	0,
 	NaN(),
+	2,
+	0,
 }
 
 var vferfinvSC = []float64{
@@ -1012,6 +1020,10 @@ var vfexpSC = []float64{
 	1.48852223e+09,
 	1.4885222e+09,
 	1,
+	// near zero
+	3.725290298461915e-09,
+	// denormal
+	-740,
 }
 var expSC = []float64{
 	0,
@@ -1023,6 +1035,8 @@ var expSC = []float64{
 	Inf(1),
 	Inf(1),
 	2.718281828459045,
+	1.0000000037252903,
+	4.2e-322,
 }
 
 var vfexp2SC = []float64{
@@ -1033,6 +1047,10 @@ var vfexp2SC = []float64{
 	NaN(),
 	// smallest float64 that overflows Exp2(x)
 	1024,
+	// near underflow
+	-1.07399999999999e+03,
+	// near zero
+	3.725290298461915e-09,
 }
 var exp2SC = []float64{
 	0,
@@ -1041,6 +1059,8 @@ var exp2SC = []float64{
 	Inf(1),
 	NaN(),
 	Inf(1),
+	5e-324,
+	1.0000000025821745,
 }
 
 var vfexpm1SC = []float64{
@@ -1589,6 +1609,7 @@ var vfpowSC = [][2]float64{
 	{Inf(-1), 1},
 	{Inf(-1), 3},
 	{Inf(-1), Pi},
+	{Inf(-1), 0.5},
 	{Inf(-1), NaN()},
 
 	{-Pi, Inf(-1)},
@@ -1607,9 +1628,11 @@ var vfpowSC = [][2]float64{
 	{-1 / 2, Inf(1)},
 	{Copysign(0, -1), Inf(-1)},
 	{Copysign(0, -1), -Pi},
+	{Copysign(0, -1), -0.5},
 	{Copysign(0, -1), -3},
 	{Copysign(0, -1), 3},
 	{Copysign(0, -1), Pi},
+	{Copysign(0, -1), 0.5},
 	{Copysign(0, -1), Inf(1)},
 
 	{0, Inf(-1)},
@@ -1666,6 +1689,7 @@ var powSC = []float64{
 	Inf(-1),         // pow(-Inf, 1)
 	Inf(-1),         // pow(-Inf, 3)
 	Inf(1),          // pow(-Inf, Pi)
+	Inf(1),          // pow(-Inf, 0.5)
 	NaN(),           // pow(-Inf, NaN)
 	0,               // pow(-Pi, -Inf)
 	NaN(),           // pow(-Pi, -Pi)
@@ -1682,9 +1706,11 @@ var powSC = []float64{
 	0,               // pow(-1/2, +Inf)
 	Inf(1),          // pow(-0, -Inf)
 	Inf(1),          // pow(-0, -Pi)
+	Inf(1),          // pow(-0, -0.5)
 	Inf(-1),         // pow(-0, -3) IEEE 754-2008
 	Copysign(0, -1), // pow(-0, 3) IEEE 754-2008
 	0,               // pow(-0, +Pi)
+	0,               // pow(-0, 0.5)
 	0,               // pow(-0, +Inf)
 	Inf(1),          // pow(+0, -Inf)
 	Inf(1),          // pow(+0, -Pi)
@@ -1949,6 +1975,8 @@ var vfldexpBC = []fi{
 	{-1, -1075},
 	{1, 1024},
 	{-1, 1024},
+	{1.0000000000000002, -1075},
+	{1, -1075},
 }
 var ldexpBC = []float64{
 	SmallestNonzeroFloat64,
@@ -1959,6 +1987,8 @@ var ldexpBC = []float64{
 	Copysign(0, -1),
 	Inf(1),
 	Inf(-1),
+	SmallestNonzeroFloat64,
+	0,
 }
 
 var logbBC = []float64{
@@ -2128,7 +2158,7 @@ func TestCbrt(t *testing.T) {
 
 func TestCeil(t *testing.T) {
 	for i := 0; i < len(vf); i++ {
-		if f := Ceil(vf[i]); ceil[i] != f {
+		if f := Ceil(vf[i]); !alike(ceil[i], f) {
 			t.Errorf("Ceil(%g) = %g, want %g", vf[i], f, ceil[i])
 		}
 	}
@@ -2310,7 +2340,7 @@ func testExp2(t *testing.T, Exp2 func(float64) float64, name string) {
 	}
 	for i := 0; i < len(vfexp2SC); i++ {
 		if f := Exp2(vfexp2SC[i]); !alike(exp2SC[i], f) {
-			t.Errorf("%s(%g) = %g, want %g", name, vfexpSC[i], f, expSC[i])
+			t.Errorf("%s(%g) = %g, want %g", name, vfexp2SC[i], f, exp2SC[i])
 		}
 	}
 	for n := -1074; n < 1024; n++ {
@@ -2355,7 +2385,7 @@ func TestDim(t *testing.T) {
 
 func TestFloor(t *testing.T) {
 	for i := 0; i < len(vf); i++ {
-		if f := Floor(vf[i]); floor[i] != f {
+		if f := Floor(vf[i]); !alike(floor[i], f) {
 			t.Errorf("Floor(%g) = %g, want %g", vf[i], f, floor[i])
 		}
 	}
@@ -2412,6 +2442,10 @@ func TestMod(t *testing.T) {
 		if f := Mod(vffmodSC[i][0], vffmodSC[i][1]); !alike(fmodSC[i], f) {
 			t.Errorf("Mod(%g, %g) = %g, want %g", vffmodSC[i][0], vffmodSC[i][1], f, fmodSC[i])
 		}
+	}
+	// verify precision of result for extreme inputs
+	if f := Mod(5.9790119248836734e+200, 1.1258465975523544); 0.6447968302508578 != f {
+		t.Errorf("Remainder(5.9790119248836734e+200, 1.1258465975523544) = %g, want 0.6447968302508578", f)
 	}
 }
 
@@ -2754,6 +2788,10 @@ func TestRemainder(t *testing.T) {
 			t.Errorf("Remainder(%g, %g) = %g, want %g", vffmodSC[i][0], vffmodSC[i][1], f, fmodSC[i])
 		}
 	}
+	// verify precision of result for extreme inputs
+	if f := Remainder(5.9790119248836734e+200, 1.1258465975523544); -0.4810497673014966 != f {
+		t.Errorf("Remainder(5.9790119248836734e+200, 1.1258465975523544) = %g, want -0.4810497673014966", f)
+	}
 }
 
 func TestRound(t *testing.T) {
@@ -2878,7 +2916,7 @@ func TestTanh(t *testing.T) {
 
 func TestTrunc(t *testing.T) {
 	for i := 0; i < len(vf); i++ {
-		if f := Trunc(vf[i]); trunc[i] != f {
+		if f := Trunc(vf[i]); !alike(trunc[i], f) {
 			t.Errorf("Trunc(%g) = %g, want %g", vf[i], f, trunc[i])
 		}
 	}
@@ -3210,7 +3248,7 @@ func BenchmarkAbs(b *testing.B) {
 func BenchmarkDim(b *testing.B) {
 	x := 0.0
 	for i := 0; i < b.N; i++ {
-		x = Dim(10, 3)
+		x = Dim(GlobalF, x)
 	}
 	GlobalF = x
 }
@@ -3596,4 +3634,42 @@ func BenchmarkYn(b *testing.B) {
 		x = Yn(2, 2.5)
 	}
 	GlobalF = x
+}
+
+func BenchmarkFloat64bits(b *testing.B) {
+	y := uint64(0)
+	for i := 0; i < b.N; i++ {
+		y = Float64bits(roundNeg)
+	}
+	GlobalI = int(y)
+}
+
+var roundUint64 = uint64(5)
+
+func BenchmarkFloat64frombits(b *testing.B) {
+	x := 0.0
+	for i := 0; i < b.N; i++ {
+		x = Float64frombits(roundUint64)
+	}
+	GlobalF = x
+}
+
+var roundFloat32 = float32(-2.5)
+
+func BenchmarkFloat32bits(b *testing.B) {
+	y := uint32(0)
+	for i := 0; i < b.N; i++ {
+		y = Float32bits(roundFloat32)
+	}
+	GlobalI = int(y)
+}
+
+var roundUint32 = uint32(5)
+
+func BenchmarkFloat32frombits(b *testing.B) {
+	x := float32(0.0)
+	for i := 0; i < b.N; i++ {
+		x = Float32frombits(roundUint32)
+	}
+	GlobalF = float64(x)
 }

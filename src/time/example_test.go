@@ -74,17 +74,17 @@ func ExampleDuration_Truncate() {
 	}
 
 	for _, t := range trunc {
-		fmt.Printf("t.Truncate(%6s) = %s\n", t, d.Truncate(t).String())
+		fmt.Printf("d.Truncate(%6s) = %s\n", t, d.Truncate(t).String())
 	}
 	// Output:
-	// t.Truncate(   1ns) = 1h15m30.918273645s
-	// t.Truncate(   1µs) = 1h15m30.918273s
-	// t.Truncate(   1ms) = 1h15m30.918s
-	// t.Truncate(    1s) = 1h15m30s
-	// t.Truncate(    2s) = 1h15m30s
-	// t.Truncate(  1m0s) = 1h15m0s
-	// t.Truncate( 10m0s) = 1h10m0s
-	// t.Truncate(1h0m0s) = 1h0m0s
+	// d.Truncate(   1ns) = 1h15m30.918273645s
+	// d.Truncate(   1µs) = 1h15m30.918273s
+	// d.Truncate(   1ms) = 1h15m30.918s
+	// d.Truncate(    1s) = 1h15m30s
+	// d.Truncate(    2s) = 1h15m30s
+	// d.Truncate(  1m0s) = 1h15m0s
+	// d.Truncate( 10m0s) = 1h10m0s
+	// d.Truncate(1h0m0s) = 1h0m0s
 }
 
 func ExampleParseDuration() {
@@ -356,23 +356,21 @@ func ExampleParseInLocation() {
 }
 
 func ExampleTime_Unix() {
-	// Create a date.
-	const nsecs = 0
-	orig := time.Date(2009, time.January, 1, 1, 9, 30, nsecs, time.UTC)
-	fmt.Printf("orig = %v\n", orig)
+	// 1 billion seconds of Unix, three ways.
+	fmt.Println(time.Unix(1e9, 0).UTC())     // 1e9 seconds
+	fmt.Println(time.Unix(0, 1e18).UTC())    // 1e18 nanoseconds
+	fmt.Println(time.Unix(2e9, -1e18).UTC()) // 2e9 seconds - 1e18 nanoseconds
 
-	// Get the Unix timestamp of the date.
-	unix := orig.Unix()
-	fmt.Printf("orig.Unix() = %v\n", unix)
-
-	// Convert the Unix date back to a time.Time.
-	parsed := time.Unix(unix, nsecs).UTC()
-	fmt.Printf("parsed = %v\n", parsed)
+	t := time.Date(2001, time.September, 9, 1, 46, 40, 0, time.UTC)
+	fmt.Println(t.Unix())     // seconds since 1970
+	fmt.Println(t.UnixNano()) // nanoseconds since 1970
 
 	// Output:
-	// orig = 2009-01-01 01:09:30 +0000 UTC
-	// orig.Unix() = 1230772170
-	// parsed = 2009-01-01 01:09:30 +0000 UTC
+	// 2001-09-09 01:46:40 +0000 UTC
+	// 2001-09-09 01:46:40 +0000 UTC
+	// 2001-09-09 01:46:40 +0000 UTC
+	// 1000000000
+	// 1000000000000000000
 }
 
 func ExampleTime_Round() {
@@ -429,6 +427,17 @@ func ExampleTime_Truncate() {
 	// t.Truncate(   2s) = 12:15:30
 	// t.Truncate( 1m0s) = 12:15:00
 	// t.Truncate(10m0s) = 12:10:00
+}
+
+func ExampleLoadLocation() {
+	location, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		panic(err)
+	}
+
+	timeInUTC := time.Date(2018, 8, 30, 12, 0, 0, 0, time.UTC)
+	fmt.Println(timeInUTC.In(location))
+	// Output: 2018-08-30 05:00:00 -0700 PDT
 }
 
 func ExampleLocation() {
@@ -599,4 +608,11 @@ func ExampleTime_AppendFormat() {
 
 	// Output:
 	// Time: 11:00AM
+}
+
+func ExampleFixedZone() {
+	loc := time.FixedZone("UTC-8", -8*60*60)
+	t := time.Date(2009, time.November, 10, 23, 0, 0, 0, loc)
+	fmt.Println("The time is:", t.Format(time.RFC822))
+	// Output: The time is: 10 Nov 09 23:00 UTC-8
 }

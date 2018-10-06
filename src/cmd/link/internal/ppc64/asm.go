@@ -236,7 +236,7 @@ func gencallstub(ctxt *ld.Link, abicase int, stub *sym.Symbol, targ *sym.Symbol)
 
 	r.Off = int32(stub.Size)
 	r.Sym = plt
-	r.Add = int64(targ.Plt)
+	r.Add = int64(targ.Plt())
 	r.Siz = 2
 	if ctxt.Arch.ByteOrder == binary.BigEndian {
 		r.Off += int32(r.Siz)
@@ -247,7 +247,7 @@ func gencallstub(ctxt *ld.Link, abicase int, stub *sym.Symbol, targ *sym.Symbol)
 	r = stub.AddRel()
 	r.Off = int32(stub.Size)
 	r.Sym = plt
-	r.Add = int64(targ.Plt)
+	r.Add = int64(targ.Plt())
 	r.Siz = 2
 	if ctxt.Arch.ByteOrder == binary.BigEndian {
 		r.Off += int32(r.Siz)
@@ -280,7 +280,7 @@ func adddynrel(ctxt *ld.Link, s *sym.Symbol, r *sym.Reloc) bool {
 		// callee. Hence, we need to go to the local entry
 		// point.  (If we don't do this, the callee will try
 		// to use r12 to compute r2.)
-		r.Add += int64(r.Sym.Localentry) * 4
+		r.Add += int64(r.Sym.Localentry()) * 4
 
 		if targ.Type == sym.SDYNIMPORT {
 			// Should have been handled in elfsetupplt
@@ -474,14 +474,14 @@ func symtoc(ctxt *ld.Link, s *sym.Symbol) int64 {
 	return toc.Value
 }
 
-func archrelocaddr(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val *int64) bool {
+func archrelocaddr(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) int64 {
 	var o1, o2 uint32
 	if ctxt.Arch.ByteOrder == binary.BigEndian {
-		o1 = uint32(*val >> 32)
-		o2 = uint32(*val)
+		o1 = uint32(val >> 32)
+		o2 = uint32(val)
 	} else {
-		o1 = uint32(*val)
-		o2 = uint32(*val >> 32)
+		o1 = uint32(val)
+		o2 = uint32(val >> 32)
 	}
 
 	// We are spreading a 31-bit address across two instructions, putting the
@@ -510,19 +510,18 @@ func archrelocaddr(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val *int64) bool 
 		}
 		o2 |= uint32(t) & 0xfffc
 	default:
-		return false
+		return -1
 	}
 
 	if ctxt.Arch.ByteOrder == binary.BigEndian {
-		*val = int64(o1)<<32 | int64(o2)
-	} else {
-		*val = int64(o2)<<32 | int64(o1)
+		return int64(o1)<<32 | int64(o2)
 	}
-	return true
+	return int64(o2)<<32 | int64(o1)
 }
 
 // resolve direct jump relocation r in s, and add trampoline if necessary
 func trampoline(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol) {
+
 	// Trampolines are created if the branch offset is too large and the linker cannot insert a call stub to handle it.
 	// For internal linking, trampolines are always created for long calls.
 	// For external linking, the linker can insert a call stub to handle a long call, but depends on having the TOC address in
@@ -541,6 +540,7 @@ func trampoline(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol) {
 		if (ctxt.LinkMode == ld.LinkExternal && s.Sect != r.Sym.Sect) || (ctxt.LinkMode == ld.LinkInternal && int64(int32(t<<6)>>6) != t) || (*ld.FlagDebugTramp > 1 && s.File != r.Sym.File) {
 			var tramp *sym.Symbol
 			for i := 0; ; i++ {
+
 				// Using r.Add as part of the name is significant in functions like duffzero where the call
 				// target is at some offset within the function.  Calls to duff+8 and duff+256 must appear as
 				// distinct trampolines.
@@ -573,7 +573,7 @@ func trampoline(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol) {
 					ld.Errorf(s, "unexpected trampoline for shared or dynamic linking\n")
 				} else {
 					ctxt.AddTramp(tramp)
-					gentramp(ctxt.Arch, ctxt.LinkMode, tramp, r.Sym, int64(r.Add))
+					gentramp(ctxt.Arch, ctxt.LinkMode, tramp, r.Sym, r.Add)
 				}
 			}
 			r.Sym = tramp
@@ -621,17 +621,17 @@ func gentramp(arch *sys.Arch, linkmode ld.LinkMode, tramp, target *sym.Symbol, o
 	arch.ByteOrder.PutUint32(tramp.P[12:], o4)
 }
 
-func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val *int64) bool {
+func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val int64) (int64, bool) {
 	if ctxt.LinkMode == ld.LinkExternal {
 		switch r.Type {
 		default:
-			return false
+			return val, false
 		case objabi.R_POWER_TLS, objabi.R_POWER_TLS_LE, objabi.R_POWER_TLS_IE:
 			r.Done = false
 			// check Outer is nil, Type is TLSBSS?
 			r.Xadd = r.Add
 			r.Xsym = r.Sym
-			return true
+			return val, true
 		case objabi.R_ADDRPOWER,
 			objabi.R_ADDRPOWER_DS,
 			objabi.R_ADDRPOWER_TOCREL,
@@ -653,24 +653,22 @@ func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val *int64) bool {
 			}
 			r.Xsym = rs
 
-			return true
+			return val, true
 		case objabi.R_CALLPOWER:
 			r.Done = false
 			r.Xsym = r.Sym
 			r.Xadd = r.Add
-			return true
+			return val, true
 		}
 	}
 
 	switch r.Type {
 	case objabi.R_CONST:
-		*val = r.Add
-		return true
+		return r.Add, true
 	case objabi.R_GOTOFF:
-		*val = ld.Symaddr(r.Sym) + r.Add - ld.Symaddr(ctxt.Syms.Lookup(".got", 0))
-		return true
+		return ld.Symaddr(r.Sym) + r.Add - ld.Symaddr(ctxt.Syms.Lookup(".got", 0)), true
 	case objabi.R_ADDRPOWER, objabi.R_ADDRPOWER_DS:
-		return archrelocaddr(ctxt, r, s, val)
+		return archrelocaddr(ctxt, r, s, val), true
 	case objabi.R_CALLPOWER:
 		// Bits 6 through 29 = (S + A - P) >> 2
 
@@ -684,14 +682,12 @@ func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val *int64) bool {
 		if int64(int32(t<<6)>>6) != t {
 			ld.Errorf(s, "direct call too far: %s %x", r.Sym.Name, t)
 		}
-		*val |= int64(uint32(t) &^ 0xfc000003)
-		return true
+		return val | int64(uint32(t)&^0xfc000003), true
 	case objabi.R_POWER_TOC: // S + A - .TOC.
-		*val = ld.Symaddr(r.Sym) + r.Add - symtoc(ctxt, s)
+		return ld.Symaddr(r.Sym) + r.Add - symtoc(ctxt, s), true
 
-		return true
 	case objabi.R_POWER_TLS_LE:
-		// The thread pointer points 0x7000 bytes after the start of the the
+		// The thread pointer points 0x7000 bytes after the start of the
 		// thread local storage area as documented in section "3.7.2 TLS
 		// Runtime Handling" of "Power Architecture 64-Bit ELF V2 ABI
 		// Specification".
@@ -699,11 +695,10 @@ func archreloc(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, val *int64) bool {
 		if int64(int16(v)) != v {
 			ld.Errorf(s, "TLS offset out of range %d", v)
 		}
-		*val = (*val &^ 0xffff) | (v & 0xffff)
-		return true
+		return (val &^ 0xffff) | (v & 0xffff), true
 	}
 
-	return false
+	return val, false
 }
 
 func archrelocvariant(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, t int64) int64 {
@@ -721,9 +716,9 @@ func archrelocvariant(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, t int64) int64
 			// overflow depends on the instruction
 			var o1 uint32
 			if ctxt.Arch.ByteOrder == binary.BigEndian {
-				o1 = ld.Be32(s.P[r.Off-2:])
+				o1 = binary.BigEndian.Uint32(s.P[r.Off-2:])
 			} else {
-				o1 = ld.Le32(s.P[r.Off:])
+				o1 = binary.LittleEndian.Uint32(s.P[r.Off:])
 			}
 			switch o1 >> 26 {
 			case 24, // ori
@@ -755,9 +750,9 @@ func archrelocvariant(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, t int64) int64
 			// overflow depends on the instruction
 			var o1 uint32
 			if ctxt.Arch.ByteOrder == binary.BigEndian {
-				o1 = ld.Be32(s.P[r.Off-2:])
+				o1 = binary.BigEndian.Uint32(s.P[r.Off-2:])
 			} else {
-				o1 = ld.Le32(s.P[r.Off:])
+				o1 = binary.LittleEndian.Uint32(s.P[r.Off:])
 			}
 			switch o1 >> 26 {
 			case 25, // oris
@@ -779,9 +774,9 @@ func archrelocvariant(ctxt *ld.Link, r *sym.Reloc, s *sym.Symbol, t int64) int64
 	case sym.RV_POWER_DS:
 		var o1 uint32
 		if ctxt.Arch.ByteOrder == binary.BigEndian {
-			o1 = uint32(ld.Be16(s.P[r.Off:]))
+			o1 = uint32(binary.BigEndian.Uint16(s.P[r.Off:]))
 		} else {
-			o1 = uint32(ld.Le16(s.P[r.Off:]))
+			o1 = uint32(binary.LittleEndian.Uint16(s.P[r.Off:]))
 		}
 		if t&3 != 0 {
 			ld.Errorf(s, "relocation for %s+%d is not aligned: %d", r.Sym.Name, r.Off, t)
@@ -798,7 +793,7 @@ overflow:
 }
 
 func addpltsym(ctxt *ld.Link, s *sym.Symbol) {
-	if s.Plt >= 0 {
+	if s.Plt() >= 0 {
 		return
 	}
 
@@ -830,11 +825,11 @@ func addpltsym(ctxt *ld.Link, s *sym.Symbol) {
 		// JMP_SLOT dynamic relocation for it.
 		//
 		// TODO(austin): ABI v1 is different
-		s.Plt = int32(plt.Size)
+		s.SetPlt(int32(plt.Size))
 
 		plt.Size += 8
 
-		rela.AddAddrPlus(ctxt.Arch, plt, int64(s.Plt))
+		rela.AddAddrPlus(ctxt.Arch, plt, int64(s.Plt()))
 		rela.AddUint64(ctxt.Arch, ld.ELF64_R_INFO(uint32(s.Dynid), uint32(elf.R_PPC64_JMP_SLOT)))
 		rela.AddUint64(ctxt.Arch, 0)
 	} else {

@@ -211,21 +211,20 @@ func TestReadMIMEHeaderNonCompliant(t *testing.T) {
 	}
 }
 
-func TestReadMIMEHeaderLeadingSpace(t *testing.T) {
-	tests := []struct {
-		input string
-		want  MIMEHeader
-	}{
-		{" Ignore: ignore\r\nFoo: foo\r\n\r\n", MIMEHeader{"Foo": {"foo"}}},
-		{"\tIgnore: ignore\r\nFoo: foo\r\n\r\n", MIMEHeader{"Foo": {"foo"}}},
-		{" Ignore1: ignore\r\n Ignore2: ignore\r\nFoo: foo\r\n\r\n", MIMEHeader{"Foo": {"foo"}}},
-		{" Ignore1: ignore\r\n\r\n", MIMEHeader{}},
+func TestReadMIMEHeaderMalformed(t *testing.T) {
+	inputs := []string{
+		"No colon first line\r\nFoo: foo\r\n\r\n",
+		" No colon first line with leading space\r\nFoo: foo\r\n\r\n",
+		"\tNo colon first line with leading tab\r\nFoo: foo\r\n\r\n",
+		" First: line with leading space\r\nFoo: foo\r\n\r\n",
+		"\tFirst: line with leading tab\r\nFoo: foo\r\n\r\n",
+		"Foo: foo\r\nNo colon second line\r\n\r\n",
 	}
-	for _, tt := range tests {
-		r := reader(tt.input)
-		m, err := r.ReadMIMEHeader()
-		if !reflect.DeepEqual(m, tt.want) || err != nil {
-			t.Errorf("ReadMIMEHeader(%q) = %v, %v; want %v", tt.input, m, err, tt.want)
+
+	for _, input := range inputs {
+		r := reader(input)
+		if m, err := r.ReadMIMEHeader(); err == nil {
+			t.Errorf("ReadMIMEHeader(%q) = %v, %v; want nil, err", input, m, err)
 		}
 	}
 }
@@ -291,7 +290,7 @@ var readResponseTests = []readResponseTest{
 	},
 }
 
-// See http://www.ietf.org/rfc/rfc959.txt page 36.
+// See https://www.ietf.org/rfc/rfc959.txt page 36.
 func TestRFC959Lines(t *testing.T) {
 	for i, tt := range readResponseTests {
 		r := reader(tt.in + "\nFOLLOWING DATA")
@@ -383,31 +382,25 @@ Non-Interned: test
 
 func BenchmarkReadMIMEHeader(b *testing.B) {
 	b.ReportAllocs()
-	var buf bytes.Buffer
-	br := bufio.NewReader(&buf)
-	r := NewReader(br)
-	for i := 0; i < b.N; i++ {
-		var want int
-		var find string
-		if (i & 1) == 1 {
-			buf.WriteString(clientHeaders)
-			want = 10
-			find = "Cookie"
-		} else {
-			buf.WriteString(serverHeaders)
-			want = 9
-			find = "Via"
-		}
-		h, err := r.ReadMIMEHeader()
-		if err != nil {
-			b.Fatal(err)
-		}
-		if len(h) != want {
-			b.Fatalf("wrong number of headers: got %d, want %d", len(h), want)
-		}
-		if _, ok := h[find]; !ok {
-			b.Fatalf("did not find key %s", find)
-		}
+	for _, set := range []struct {
+		name    string
+		headers string
+	}{
+		{"client_headers", clientHeaders},
+		{"server_headers", serverHeaders},
+	} {
+		b.Run(set.name, func(b *testing.B) {
+			var buf bytes.Buffer
+			br := bufio.NewReader(&buf)
+			r := NewReader(br)
+
+			for i := 0; i < b.N; i++ {
+				buf.WriteString(set.headers)
+				if _, err := r.ReadMIMEHeader(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

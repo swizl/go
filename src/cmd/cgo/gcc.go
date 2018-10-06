@@ -164,9 +164,29 @@ func (p *Package) Translate(f *File) {
 		cref.Name.C = cname(cref.Name.Go)
 	}
 	p.loadDefines(f)
-	needType := p.guessKinds(f)
-	if len(needType) > 0 {
-		p.loadDWARF(f, needType)
+	p.typedefs = map[string]bool{}
+	p.typedefList = nil
+	numTypedefs := -1
+	for len(p.typedefs) > numTypedefs {
+		numTypedefs = len(p.typedefs)
+		// Also ask about any typedefs we've seen so far.
+		for _, a := range p.typedefList {
+			f.Name[a] = &Name{
+				Go: a,
+				C:  a,
+			}
+		}
+		needType := p.guessKinds(f)
+		if len(needType) > 0 {
+			p.loadDWARF(f, needType)
+		}
+
+		// In godefs mode we're OK with the typedefs, which
+		// will presumably also be defined in the file, we
+		// don't want to resolve them to their base types.
+		if *godefs {
+			break
+		}
 	}
 	if p.rewriteCalls(f) {
 		// Add `import _cgo_unsafe "unsafe"` after the package statement.
@@ -224,6 +244,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 	// Determine kinds for names we already know about,
 	// like #defines or 'struct foo', before bothering with gcc.
 	var names, needType []*Name
+	optional := map[*Name]bool{}
 	for _, key := range nameKeys(f.Name) {
 		n := f.Name[key]
 		// If we've already found this name as a #define
@@ -258,6 +279,14 @@ func (p *Package) guessKinds(f *File) []*Name {
 			n.Kind = "type"
 			needType = append(needType, n)
 			continue
+		}
+
+		if goos == "darwin" && strings.HasSuffix(n.C, "Ref") {
+			// For FooRef, find out if FooGetTypeID exists.
+			s := n.C[:len(n.C)-3] + "GetTypeID"
+			n := &Name{Go: s, C: s}
+			names = append(names, n)
+			optional[n] = true
 		}
 
 		// Otherwise, we'll need to find out from gcc.
@@ -406,6 +435,11 @@ func (p *Package) guessKinds(f *File) []*Name {
 	for i, n := range names {
 		switch sniff[i] {
 		default:
+			if sniff[i]&notDeclared != 0 && optional[n] {
+				// Ignore optional undeclared identifiers.
+				// Don't report an error, and skip adding n to the needType array.
+				continue
+			}
 			error_(f.NamePos[n], "could not determine kind of name for C.%s", fixGo(n.Go))
 		case notStrLiteral | notType:
 			n.Kind = "iconst"
@@ -418,6 +452,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 		case notIntConst | notNumConst | notStrLiteral | notType:
 			n.Kind = "not-type"
 		}
+		needType = append(needType, n)
 	}
 	if nerrors > 0 {
 		// Check if compiling the preamble by itself causes any errors,
@@ -431,7 +466,6 @@ func (p *Package) guessKinds(f *File) []*Name {
 		fatalf("unresolved names")
 	}
 
-	needType = append(needType, names...)
 	return needType
 }
 
@@ -537,6 +571,7 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 				fatalf("malformed __cgo__ name: %s", name)
 			}
 			types[i] = t.Type
+			p.recordTypedefs(t.Type)
 		}
 		if e.Tag != dwarf.TagCompileUnit {
 			r.SkipChildren()
@@ -546,6 +581,11 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 	// Record types and typedef information.
 	var conv typeConv
 	conv.Init(p.PtrSize, p.IntSize)
+	for i, n := range names {
+		if strings.HasSuffix(n.Go, "GetTypeID") && types[i].String() == "func() CFTypeID" {
+			conv.getTypeIDs[n.Go[:len(n.Go)-9]] = true
+		}
+	}
 	for i, n := range names {
 		if types[i] == nil {
 			continue
@@ -567,7 +607,25 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 					}
 				}
 			case "fconst":
-				if i < len(floats) {
+				if i >= len(floats) {
+					break
+				}
+				switch base(types[i]).(type) {
+				case *dwarf.IntType, *dwarf.UintType:
+					// This has an integer type so it's
+					// not really a floating point
+					// constant. This can happen when the
+					// C compiler complains about using
+					// the value as an integer constant,
+					// but not as a general constant.
+					// Treat this as a variable of the
+					// appropriate type, not a constant,
+					// to get C-style type handling,
+					// avoiding the problem that C permits
+					// uint64(-1) but Go does not.
+					// See issue 26066.
+					n.Kind = "var"
+				default:
 					n.Const = fmt.Sprintf("%f", floats[i])
 				}
 			case "sconst":
@@ -577,6 +635,47 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 			}
 		}
 		conv.FinishType(pos)
+	}
+}
+
+// recordTypedefs remembers in p.typedefs all the typedefs used in dtypes and its children.
+func (p *Package) recordTypedefs(dtype dwarf.Type) {
+	p.recordTypedefs1(dtype, map[dwarf.Type]bool{})
+}
+func (p *Package) recordTypedefs1(dtype dwarf.Type, visited map[dwarf.Type]bool) {
+	if dtype == nil {
+		return
+	}
+	if visited[dtype] {
+		return
+	}
+	visited[dtype] = true
+	switch dt := dtype.(type) {
+	case *dwarf.TypedefType:
+		if strings.HasPrefix(dt.Name, "__builtin") {
+			// Don't look inside builtin types. There be dragons.
+			return
+		}
+		if !p.typedefs[dt.Name] {
+			p.typedefs[dt.Name] = true
+			p.typedefList = append(p.typedefList, dt.Name)
+			p.recordTypedefs1(dt.Type, visited)
+		}
+	case *dwarf.PtrType:
+		p.recordTypedefs1(dt.Type, visited)
+	case *dwarf.ArrayType:
+		p.recordTypedefs1(dt.Type, visited)
+	case *dwarf.QualType:
+		p.recordTypedefs1(dt.Type, visited)
+	case *dwarf.FuncType:
+		p.recordTypedefs1(dt.ReturnType, visited)
+		for _, a := range dt.ParamType {
+			p.recordTypedefs1(a, visited)
+		}
+	case *dwarf.StructType:
+		for _, f := range dt.Field {
+			p.recordTypedefs1(f.Type, visited)
+		}
 	}
 }
 
@@ -1331,7 +1430,7 @@ func (p *Package) gccDebug(stdin []byte, nnames int) (d *dwarf.Data, ints []int6
 			if len(data) <= strlen {
 				fatalf("invalid string literal")
 			}
-			strs[n] = string(data[:strlen])
+			strs[n] = data[:strlen]
 		}
 	}
 
@@ -1594,6 +1693,9 @@ func (p *Package) gccErrors(stdin []byte) string {
 		}
 	}
 
+	// Force -O0 optimization
+	nargs = append(nargs, "-O0")
+
 	if *debugGcc {
 		fmt.Fprintf(os.Stderr, "$ %s <<EOF\n", strings.Join(nargs, " "))
 		os.Stderr.Write(stdin)
@@ -1640,7 +1742,11 @@ type typeConv struct {
 	// Map from types to incomplete pointers to those types.
 	ptrs map[dwarf.Type][]*Type
 	// Keys of ptrs in insertion order (deterministic worklist)
+	// ptrKeys contains exactly the keys in ptrs.
 	ptrKeys []dwarf.Type
+
+	// Type names X for which there exists an XGetTypeID function with type func() CFTypeID.
+	getTypeIDs map[string]bool
 
 	// Predeclared types.
 	bool                                   ast.Expr
@@ -1671,6 +1777,7 @@ func (c *typeConv) Init(ptrSize, intSize int64) {
 	c.intSize = intSize
 	c.m = make(map[dwarf.Type]*Type)
 	c.ptrs = make(map[dwarf.Type][]*Type)
+	c.getTypeIDs = make(map[string]bool)
 	c.bool = c.Ident("bool")
 	c.byte = c.Ident("byte")
 	c.int8 = c.Ident("int8")
@@ -1778,14 +1885,15 @@ func (c *typeConv) FinishType(pos token.Pos) {
 	for len(c.ptrKeys) > 0 {
 		dtype := c.ptrKeys[0]
 		c.ptrKeys = c.ptrKeys[1:]
+		ptrs := c.ptrs[dtype]
+		delete(c.ptrs, dtype)
 
 		// Note Type might invalidate c.ptrs[dtype].
 		t := c.Type(dtype, pos)
-		for _, ptr := range c.ptrs[dtype] {
+		for _, ptr := range ptrs {
 			ptr.Go.(*ast.StarExpr).X = t.Go
 			ptr.C.Set("%s*", t.C)
 		}
-		c.ptrs[dtype] = nil // retain the map key
 	}
 }
 
@@ -2057,6 +2165,16 @@ func (c *typeConv) Type(dtype dwarf.Type, pos token.Pos) *Type {
 		name := c.Ident("_Ctype_" + dt.Name)
 		goIdent[name.Name] = name
 		sub := c.Type(dt.Type, pos)
+		if c.badPointerTypedef(dt) {
+			// Treat this typedef as a uintptr.
+			s := *sub
+			s.Go = c.uintptr
+			sub = &s
+			// Make sure we update any previously computed type.
+			if oldType := typedef[name.Name]; oldType != nil {
+				oldType.Go = sub.Go
+			}
+		}
 		t.Go = name
 		if unionWithPointer[sub.Go] {
 			unionWithPointer[t.Go] = true
@@ -2215,6 +2333,11 @@ func (c *typeConv) FuncArg(dtype dwarf.Type, pos token.Pos) *Type {
 			if _, void := base(ptr.Type).(*dwarf.VoidType); void {
 				break
 			}
+			// ...or the typedef is one in which we expect bad pointers.
+			// It will be a uintptr instead of *X.
+			if c.baseBadPointerTypedef(dt) {
+				break
+			}
 
 			t = c.Type(ptr, pos)
 			if t == nil {
@@ -2371,7 +2494,9 @@ func (c *typeConv) Struct(dt *dwarf.StructType, pos token.Pos) (expr *ast.Struct
 		size := t.Size
 		talign := t.Align
 		if f.BitSize > 0 {
-			if f.BitSize%8 != 0 {
+			switch f.BitSize {
+			case 8, 16, 32, 64:
+			default:
 				continue
 			}
 			size = f.BitSize / 8
@@ -2546,4 +2671,171 @@ func fieldPrefix(fld []*ast.Field) string {
 		}
 	}
 	return prefix
+}
+
+// badPointerTypedef reports whether t is a C typedef that should not be considered a pointer in Go.
+// A typedef is bad if C code sometimes stores non-pointers in this type.
+// TODO: Currently our best solution is to find these manually and list them as
+// they come up. A better solution is desired.
+func (c *typeConv) badPointerTypedef(dt *dwarf.TypedefType) bool {
+	if c.badCFType(dt) {
+		return true
+	}
+	if c.badJNI(dt) {
+		return true
+	}
+	return false
+}
+
+// baseBadPointerTypedef reports whether the base of a chain of typedefs is a bad typedef
+// as badPointerTypedef reports.
+func (c *typeConv) baseBadPointerTypedef(dt *dwarf.TypedefType) bool {
+	for {
+		if t, ok := dt.Type.(*dwarf.TypedefType); ok {
+			dt = t
+			continue
+		}
+		break
+	}
+	return c.badPointerTypedef(dt)
+}
+
+func (c *typeConv) badCFType(dt *dwarf.TypedefType) bool {
+	// The real bad types are CFNumberRef and CFDateRef.
+	// Sometimes non-pointers are stored in these types.
+	// CFTypeRef is a supertype of those, so it can have bad pointers in it as well.
+	// We return true for the other *Ref types just so casting between them is easier.
+	// We identify the correct set of types as those ending in Ref and for which
+	// there exists a corresponding GetTypeID function.
+	// See comment below for details about the bad pointers.
+	if goos != "darwin" {
+		return false
+	}
+	s := dt.Name
+	if !strings.HasSuffix(s, "Ref") {
+		return false
+	}
+	s = s[:len(s)-3]
+	if s == "CFType" {
+		return true
+	}
+	if c.getTypeIDs[s] {
+		return true
+	}
+	if i := strings.Index(s, "Mutable"); i >= 0 && c.getTypeIDs[s[:i]+s[i+7:]] {
+		// Mutable and immutable variants share a type ID.
+		return true
+	}
+	return false
+}
+
+// Comment from Darwin's CFInternal.h
+/*
+// Tagged pointer support
+// Low-bit set means tagged object, next 3 bits (currently)
+// define the tagged object class, next 4 bits are for type
+// information for the specific tagged object class.  Thus,
+// the low byte is for type info, and the rest of a pointer
+// (32 or 64-bit) is for payload, whatever the tagged class.
+//
+// Note that the specific integers used to identify the
+// specific tagged classes can and will change from release
+// to release (that's why this stuff is in CF*Internal*.h),
+// as can the definition of type info vs payload above.
+//
+#if __LP64__
+#define CF_IS_TAGGED_OBJ(PTR)	((uintptr_t)(PTR) & 0x1)
+#define CF_TAGGED_OBJ_TYPE(PTR)	((uintptr_t)(PTR) & 0xF)
+#else
+#define CF_IS_TAGGED_OBJ(PTR)	0
+#define CF_TAGGED_OBJ_TYPE(PTR)	0
+#endif
+
+enum {
+    kCFTaggedObjectID_Invalid = 0,
+    kCFTaggedObjectID_Atom = (0 << 1) + 1,
+    kCFTaggedObjectID_Undefined3 = (1 << 1) + 1,
+    kCFTaggedObjectID_Undefined2 = (2 << 1) + 1,
+    kCFTaggedObjectID_Integer = (3 << 1) + 1,
+    kCFTaggedObjectID_DateTS = (4 << 1) + 1,
+    kCFTaggedObjectID_ManagedObjectID = (5 << 1) + 1, // Core Data
+    kCFTaggedObjectID_Date = (6 << 1) + 1,
+    kCFTaggedObjectID_Undefined7 = (7 << 1) + 1,
+};
+*/
+
+func (c *typeConv) badJNI(dt *dwarf.TypedefType) bool {
+	// In Dalvik and ART, the jobject type in the JNI interface of the JVM has the
+	// property that it is sometimes (always?) a small integer instead of a real pointer.
+	// Note: although only the android JVMs are bad in this respect, we declare the JNI types
+	// bad regardless of platform, so the same Go code compiles on both android and non-android.
+	if parent, ok := jniTypes[dt.Name]; ok {
+		// Try to make sure we're talking about a JNI type, not just some random user's
+		// type that happens to use the same name.
+		// C doesn't have the notion of a package, so it's hard to be certain.
+
+		// Walk up to jobject, checking each typedef on the way.
+		w := dt
+		for parent != "" {
+			t, ok := w.Type.(*dwarf.TypedefType)
+			if !ok || t.Name != parent {
+				return false
+			}
+			w = t
+			parent, ok = jniTypes[w.Name]
+			if !ok {
+				return false
+			}
+		}
+
+		// Check that the typedef is either:
+		// 1:
+		//     	struct _jobject;
+		//     	typedef struct _jobject *jobject;
+		// 2: (in NDK16 in C++)
+		//     	class _jobject {};
+		//     	typedef _jobject* jobject;
+		// 3: (in NDK16 in C)
+		//     	typedef void* jobject;
+		if ptr, ok := w.Type.(*dwarf.PtrType); ok {
+			switch v := ptr.Type.(type) {
+			case *dwarf.VoidType:
+				return true
+			case *dwarf.StructType:
+				if v.StructName == "_jobject" && len(v.Field) == 0 {
+					switch v.Kind {
+					case "struct":
+						if v.Incomplete {
+							return true
+						}
+					case "class":
+						if !v.Incomplete {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// jniTypes maps from JNI types that we want to be uintptrs, to the underlying type to which
+// they are mapped. The base "jobject" maps to the empty string.
+var jniTypes = map[string]string{
+	"jobject":       "",
+	"jclass":        "jobject",
+	"jthrowable":    "jobject",
+	"jstring":       "jobject",
+	"jarray":        "jobject",
+	"jbooleanArray": "jarray",
+	"jbyteArray":    "jarray",
+	"jcharArray":    "jarray",
+	"jshortArray":   "jarray",
+	"jintArray":     "jarray",
+	"jlongArray":    "jarray",
+	"jfloatArray":   "jarray",
+	"jdoubleArray":  "jarray",
+	"jobjectArray":  "jarray",
+	"jweak":         "jobject",
 }

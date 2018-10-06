@@ -82,6 +82,7 @@ func TestAfterStress(t *testing.T) {
 }
 
 func benchmark(b *testing.B, bench func(n int)) {
+
 	// Create equal number of garbage timers on each P before starting
 	// the benchmark.
 	var wg sync.WaitGroup
@@ -358,7 +359,7 @@ func TestSleepZeroDeadlock(t *testing.T) {
 func testReset(d Duration) error {
 	t0 := NewTimer(2 * d)
 	Sleep(d)
-	if t0.Reset(3*d) != true {
+	if !t0.Reset(3 * d) {
 		return errors.New("resetting unfired timer returned false")
 	}
 	Sleep(2 * d)
@@ -374,7 +375,7 @@ func testReset(d Duration) error {
 		return errors.New("reset timer did not fire")
 	}
 
-	if t0.Reset(50*Millisecond) != false {
+	if t0.Reset(50 * Millisecond) {
 		return errors.New("resetting expired timer returned true")
 	}
 	return nil
@@ -424,10 +425,6 @@ func TestOverflowSleep(t *testing.T) {
 // Test that a panic while deleting a timer does not leave
 // the timers mutex held, deadlocking a ticker.Stop in a defer.
 func TestIssue5745(t *testing.T) {
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm" {
-		t.Skipf("skipping on %s/%s, see issue 10043", runtime.GOOS, runtime.GOARCH)
-	}
-
 	ticker := NewTicker(Hour)
 	defer func() {
 		// would deadlock here before the fix due to

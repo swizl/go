@@ -18,7 +18,9 @@ package heap
 
 import "sort"
 
-// Any type that implements heap.Interface may be used as a
+// The Interface type describes the requirements
+// for a type using the routines in this package.
+// Any type that implements it may be used as a
 // min-heap with the following invariants (established after
 // Init has been called or if the data is empty or sorted):
 //
@@ -33,11 +35,10 @@ type Interface interface {
 	Pop() interface{}   // remove and return element Len() - 1.
 }
 
-// A heap must be initialized before any of the heap operations
-// can be used. Init is idempotent with respect to the heap invariants
+// Init establishes the heap invariants required by the other routines in this package.
+// Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
 // Its complexity is O(n) where n = h.Len().
-//
 func Init(h Interface) {
 	// heapify
 	n := h.Len()
@@ -65,8 +66,8 @@ func Pop(h Interface) interface{} {
 	return h.Pop()
 }
 
-// Remove removes the element at index i from the heap.
-// The complexity is O(log(n)) where n = h.Len().
+// Remove removes the element at index i from the heap and returns
+// the element. The complexity is O(log(n)) where n = h.Len().
 //
 func Remove(h Interface, i int) interface{} {
 	n := h.Len() - 1

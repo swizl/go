@@ -11,18 +11,42 @@ go/types/scope.go: method WriteTo(w io.Writer, n int, recurse bool) should have 
 
 // Nothing much to do about cross-package assembly. Unfortunate.
 runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: call is in package reflect
-runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: Equal is in package bytes
-runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: IndexByte is in package bytes
-runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: IndexByte is in package strings
+internal/bytealg/equal_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: Equal is in package bytes
+internal/bytealg/equal_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: memequal is in package runtime
+internal/bytealg/equal_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: memequal_varlen is in package runtime
+internal/bytealg/indexbyte_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: IndexByte is in package bytes
+internal/bytealg/indexbyte_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: IndexByte is in package strings
+
+// The write barrier is called directly by the compiler, so no Go def
+runtime/asm_ARCHSUFF.s: [GOARCH] gcWriteBarrier: function gcWriteBarrier missing Go declaration
 
 // Legitimate vet complaints in which we are testing for correct runtime behavior
 // in bad situations that vet can also detect statically.
 encoding/json/decode_test.go: struct field m has json tag but is not exported
 encoding/json/decode_test.go: struct field m2 has json tag but is not exported
+encoding/json/decode_test.go: struct field s has json tag but is not exported
 encoding/json/tagkey_test.go: struct field tag `:"BadFormat"` not compatible with reflect.StructTag.Get: bad syntax for struct tag key
 runtime/testdata/testprog/deadlock.go: unreachable code
 runtime/testdata/testprog/deadlock.go: unreachable code
-sync/cond_test.go: assignment copies lock value to c2: sync.Cond contains sync.noCopy
+
+// Compiler tests that make sure even vet-failing code adheres to the spec.
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (64 bits) too small for shift of 4294967296
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (64 bits) too small for shift of 4294967296
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (32 bits) too small for shift of 4294967295
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (32 bits) too small for shift of 4294967295
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (16 bits) too small for shift of 65535
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (16 bits) too small for shift of 65535
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (8 bits) too small for shift of 255
+cmd/compile/internal/gc/testdata/arithConst_test.go: a (8 bits) too small for shift of 255
+cmd/compile/internal/gc/testdata/arith_test.go: x (64 bits) too small for shift of 100
+cmd/compile/internal/gc/testdata/arith_test.go: int32(x) (32 bits) too small for shift of 4294967295
+cmd/compile/internal/gc/testdata/arith_test.go: int16(x) (16 bits) too small for shift of 65535
+cmd/compile/internal/gc/testdata/arith_test.go: int8(x) (8 bits) too small for shift of 255
+cmd/compile/internal/gc/testdata/arith_test.go: w (32 bits) too small for shift of 32
+cmd/compile/internal/gc/testdata/break_test.go: unreachable code
+cmd/compile/internal/gc/testdata/break_test.go: unreachable code
+cmd/compile/internal/gc/testdata/namedReturn_test.go: self-assignment of t to t
+cmd/compile/internal/gc/testdata/short_test.go: unreachable code
 
 // Non-standard method signatures.
 // These cases are basically ok.

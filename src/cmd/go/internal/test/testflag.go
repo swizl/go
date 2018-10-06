@@ -40,15 +40,16 @@ var testFlagDefn = []*cmdflag.Defn{
 	{Name: "bench", PassToTest: true},
 	{Name: "benchmem", BoolVar: new(bool), PassToTest: true},
 	{Name: "benchtime", PassToTest: true},
+	{Name: "blockprofile", PassToTest: true},
+	{Name: "blockprofilerate", PassToTest: true},
 	{Name: "count", PassToTest: true},
 	{Name: "coverprofile", PassToTest: true},
 	{Name: "cpu", PassToTest: true},
 	{Name: "cpuprofile", PassToTest: true},
+	{Name: "failfast", BoolVar: new(bool), PassToTest: true},
 	{Name: "list", PassToTest: true},
 	{Name: "memprofile", PassToTest: true},
 	{Name: "memprofilerate", PassToTest: true},
-	{Name: "blockprofile", PassToTest: true},
-	{Name: "blockprofilerate", PassToTest: true},
 	{Name: "mutexprofile", PassToTest: true},
 	{Name: "mutexprofilefraction", PassToTest: true},
 	{Name: "outputdir", PassToTest: true},
@@ -62,6 +63,7 @@ var testFlagDefn = []*cmdflag.Defn{
 
 // add build flags to testFlagDefn
 func init() {
+	cmdflag.AddKnownFlags("test", testFlagDefn)
 	var cmd base.Command
 	work.AddBuildFlags(&cmd)
 	cmd.Flag.VisitAll(func(f *flag.Flag) {
@@ -86,8 +88,8 @@ func init() {
 //	go test fmt -custom-flag-for-fmt-test
 //	go test -x math
 func testFlags(args []string) (packageNames, passToTest []string) {
+	args = str.StringList(cmdflag.FindGOFLAGS(testFlagDefn), args)
 	inPkg := false
-	outputDir := ""
 	var explicitArgs []string
 	for i := 0; i < len(args); i++ {
 		if !strings.HasPrefix(args[i], "-") {
@@ -137,7 +139,7 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 			case "c", "i", "v", "cover", "json":
 				cmdflag.SetBool(cmd, f.BoolVar, value)
 				if f.Name == "json" && testJSON {
-					passToTest = append(passToTest, "-test.v")
+					passToTest = append(passToTest, "-test.v=true")
 				}
 			case "o":
 				testO = value
@@ -179,7 +181,7 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 				}
 				testCover = true
 			case "outputdir":
-				outputDir = value
+				testOutputDir = value
 			case "vet":
 				testVetList = value
 			}
@@ -219,7 +221,7 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 	}
 
 	// Tell the test what directory we're running in, so it can write the profiles there.
-	if testProfile != "" && outputDir == "" {
+	if testProfile != "" && testOutputDir == "" {
 		dir, err := os.Getwd()
 		if err != nil {
 			base.Fatalf("error from os.Getwd: %s", err)

@@ -17,6 +17,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 type clientHandshakeState struct {
@@ -91,7 +92,6 @@ NextCipherSuite:
 	return hello, nil
 }
 
-// c.out.Mutex <= L; c.handshakeMutex <= L.
 func (c *Conn) clientHandshake() error {
 	if c.config == nil {
 		c.config = defaultConfig()
@@ -265,8 +265,9 @@ func (hs *clientHandshakeState) handshake() error {
 		}
 	}
 
+	c.ekm = ekmFromMasterSecret(c.vers, hs.suite, hs.masterSecret, hs.hello.random, hs.serverHello.random)
 	c.didResume = isResume
-	c.handshakeComplete = true
+	atomic.StoreUint32(&c.handshakeStatus, 1)
 
 	return nil
 }
@@ -372,26 +373,34 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 		}
 	}
 
-	if hs.serverHello.ocspStapling {
-		msg, err = c.readHandshake()
-		if err != nil {
-			return err
-		}
-		cs, ok := msg.(*certificateStatusMsg)
-		if !ok {
+	msg, err = c.readHandshake()
+	if err != nil {
+		return err
+	}
+
+	cs, ok := msg.(*certificateStatusMsg)
+	if ok {
+		// RFC4366 on Certificate Status Request:
+		// The server MAY return a "certificate_status" message.
+
+		if !hs.serverHello.ocspStapling {
+			// If a server returns a "CertificateStatus" message, then the
+			// server MUST have included an extension of type "status_request"
+			// with empty "extension_data" in the extended server hello.
+
 			c.sendAlert(alertUnexpectedMessage)
-			return unexpectedMessageError(cs, msg)
+			return errors.New("tls: received unexpected CertificateStatus message")
 		}
 		hs.finishedHash.Write(cs.marshal())
 
 		if cs.statusType == statusTypeOCSP {
 			c.ocspResponse = cs.response
 		}
-	}
 
-	msg, err = c.readHandshake()
-	if err != nil {
-		return err
+		msg, err = c.readHandshake()
+		if err != nil {
+			return err
+		}
 	}
 
 	keyAgreement := hs.suite.ka(c.vers)
@@ -471,31 +480,25 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 			return fmt.Errorf("tls: client certificate private key of type %T does not implement crypto.Signer", chainToSend.PrivateKey)
 		}
 
-		var signatureType uint8
-		switch key.Public().(type) {
-		case *ecdsa.PublicKey:
-			signatureType = signatureECDSA
-		case *rsa.PublicKey:
-			signatureType = signatureRSA
-		default:
-			c.sendAlert(alertInternalError)
-			return fmt.Errorf("tls: failed to sign handshake with client certificate: unknown client certificate key type: %T", key)
-		}
-
-		// SignatureAndHashAlgorithm was introduced in TLS 1.2.
-		if certVerify.hasSignatureAndHash {
-			certVerify.signatureAlgorithm, err = hs.finishedHash.selectClientCertSignatureAlgorithm(certReq.supportedSignatureAlgorithms, signatureType)
-			if err != nil {
-				c.sendAlert(alertInternalError)
-				return err
-			}
-		}
-		digest, hashFunc, err := hs.finishedHash.hashForClientCertificate(signatureType, certVerify.signatureAlgorithm, hs.masterSecret)
+		signatureAlgorithm, sigType, hashFunc, err := pickSignatureAlgorithm(key.Public(), certReq.supportedSignatureAlgorithms, hs.hello.supportedSignatureAlgorithms, c.vers)
 		if err != nil {
 			c.sendAlert(alertInternalError)
 			return err
 		}
-		certVerify.signature, err = key.Sign(c.config.rand(), digest, hashFunc)
+		// SignatureAndHashAlgorithm was introduced in TLS 1.2.
+		if certVerify.hasSignatureAndHash {
+			certVerify.signatureAlgorithm = signatureAlgorithm
+		}
+		digest, err := hs.finishedHash.hashForClientCertificate(sigType, hashFunc, hs.masterSecret)
+		if err != nil {
+			c.sendAlert(alertInternalError)
+			return err
+		}
+		signOpts := crypto.SignerOpts(hashFunc)
+		if sigType == signatureRSAPSS {
+			signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: hashFunc}
+		}
+		certVerify.signature, err = key.Sign(c.config.rand(), digest, signOpts)
 		if err != nil {
 			c.sendAlert(alertInternalError)
 			return err

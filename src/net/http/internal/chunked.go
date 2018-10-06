@@ -171,7 +171,9 @@ func removeChunkExtension(p []byte) ([]byte, error) {
 
 // NewChunkedWriter returns a new chunkedWriter that translates writes into HTTP
 // "chunked" format before writing them to w. Closing the returned chunkedWriter
-// sends the final 0-length chunk that marks the end of the stream.
+// sends the final 0-length chunk that marks the end of the stream but does
+// not send the final CRLF that appears after trailers; trailers and the last
+// CRLF must be written separately.
 //
 // NewChunkedWriter is not needed by normal applications. The http
 // package adds chunking automatically if handlers don't set a
@@ -192,6 +194,7 @@ type chunkedWriter struct {
 // NOTE: Note that the corresponding chunk-writing procedure in Conn.Write has
 // a bug since it does not check for success of io.WriteString
 func (cw *chunkedWriter) Write(data []byte) (n int, err error) {
+
 	// Don't send 0-length data. It looks like EOF for chunked encoding.
 	if len(data) == 0 {
 		return 0, nil

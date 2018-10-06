@@ -8,13 +8,15 @@ package vet
 import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/load"
+	"cmd/go/internal/modload"
 	"cmd/go/internal/work"
+	"path/filepath"
 )
 
 var CmdVet = &base.Command{
 	Run:         runVet,
 	CustomFlags: true,
-	UsageLine:   "vet [-n] [-x] [build flags] [vet flags] [packages]",
+	UsageLine:   "go vet [-n] [-x] [build flags] [vet flags] [packages]",
 	Short:       "report likely mistakes in packages",
 	Long: `
 Vet runs the Go vet command on the packages named by the import paths.
@@ -34,10 +36,19 @@ See also: go fmt, go fix.
 }
 
 func runVet(cmd *base.Command, args []string) {
+	modload.LoadTests = true
+
 	vetFlags, pkgArgs := vetFlags(args)
 
 	work.BuildInit()
 	work.VetFlags = vetFlags
+	if vetTool != "" {
+		var err error
+		work.VetTool, err = filepath.Abs(vetTool)
+		if err != nil {
+			base.Fatalf("%v", err)
+		}
+	}
 
 	pkgs := load.PackagesForBuild(pkgArgs)
 	if len(pkgs) == 0 {
@@ -49,7 +60,21 @@ func runVet(cmd *base.Command, args []string) {
 
 	root := &work.Action{Mode: "go vet"}
 	for _, p := range pkgs {
-		root.Deps = append(root.Deps, b.VetAction(work.ModeBuild, work.ModeBuild, p))
+		_, ptest, pxtest, err := load.TestPackagesFor(p, nil)
+		if err != nil {
+			base.Errorf("%v", err)
+			continue
+		}
+		if len(ptest.GoFiles) == 0 && len(ptest.CgoFiles) == 0 && pxtest == nil {
+			base.Errorf("go vet %s: no Go files in %s", p.ImportPath, p.Dir)
+			continue
+		}
+		if len(ptest.GoFiles) > 0 || len(ptest.CgoFiles) > 0 {
+			root.Deps = append(root.Deps, b.VetAction(work.ModeBuild, work.ModeBuild, ptest))
+		}
+		if pxtest != nil {
+			root.Deps = append(root.Deps, b.VetAction(work.ModeBuild, work.ModeBuild, pxtest))
+		}
 	}
 	b.Do(root)
 }

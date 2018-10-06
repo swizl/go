@@ -16,7 +16,6 @@ import (
 	"log"
 	"os"
 	"sort"
-	"strconv"
 
 	"cmd/internal/edit"
 	"cmd/internal/objabi"
@@ -238,23 +237,28 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 		//		if y {
 		//		}
 		//	}
-		f.edit.Insert(f.offset(n.Body.End()), "else{")
 		elseOffset := f.findText(n.Body.End(), "else")
 		if elseOffset < 0 {
 			panic("lost else")
 		}
-		f.edit.Delete(elseOffset, elseOffset+4)
+		f.edit.Insert(elseOffset+4, "{")
 		f.edit.Insert(f.offset(n.Else.End()), "}")
+
+		// We just created a block, now walk it.
+		// Adjust the position of the new block to start after
+		// the "else". That will cause it to follow the "{"
+		// we inserted above.
+		pos := f.fset.File(n.Body.End()).Pos(elseOffset + 4)
 		switch stmt := n.Else.(type) {
 		case *ast.IfStmt:
 			block := &ast.BlockStmt{
-				Lbrace: n.Body.End(), // Start at end of the "if" block so the covered part looks like it starts at the "else".
+				Lbrace: pos,
 				List:   []ast.Stmt{stmt},
 				Rbrace: stmt.End(),
 			}
 			n.Else = block
 		case *ast.BlockStmt:
-			stmt.Lbrace = n.Body.End() // Start at end of the "if" block so the covered part looks like it starts at the "else".
+			stmt.Lbrace = pos
 		default:
 			panic("unexpected node type in if")
 		}
@@ -288,17 +292,6 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 	}
 	return f
 }
-
-// unquote returns the unquoted string.
-func unquote(s string) string {
-	t, err := strconv.Unquote(s)
-	if err != nil {
-		log.Fatalf("cover: improperly quoted string %q\n", s)
-	}
-	return t
-}
-
-var slashslash = []byte("//")
 
 func annotate(name string) {
 	fset := token.NewFileSet()

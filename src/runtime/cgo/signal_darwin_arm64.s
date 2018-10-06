@@ -10,7 +10,7 @@
 //
 //	R1 - LR at moment of fault
 //	R2 - PC at moment of fault
-TEXT xx_cgo_panicmem(SB),NOSPLIT,$-8
+TEXT xx_cgo_panicmem(SB),NOSPLIT|NOFRAME,$0
 	// If in external C code, we need to load the g register.
 	BL  runtime·load_g(SB)
 	CMP $0, g
@@ -37,7 +37,7 @@ ongothread:
 
 	// Build a 32-byte stack frame for us for this call.
 	// Saved LR (none available) is at the bottom,
-	// then the PC argument for setsigsegv, 
+	// then the PC argument for setsigsegv,
 	// then a copy of the LR for us to restore.
 	MOVD.W $0, -32(RSP)
 	MOVD R1, 8(RSP)
